@@ -1,0 +1,48 @@
+name: collect
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: collect
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt pytest
+      - run: python -m pytest -q tests
+      - name: Telecharger la liste des aeroports (OurAirports, domaine public)
+        run: curl -fsSL -o airports.csv https://davidmegginson.github.io/ourairports-data/airports.csv
+      - name: Recuperer les donnees (branche data)
+        run: |
+          mkdir out && cd out
+          git init -q -b data
+          git remote add origin "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
+          if git fetch -q --depth=1 origin data; then git reset -q --hard FETCH_HEAD; fi
+      - name: Releve (environ 27 min, un releve toutes les 2 min)
+        env:
+          OUT_DIR: out
+          DURATION: '1620'
+          INTERVAL: '120'
+        run: python collector/collector.py
+      - name: Publier les donnees
+        if: always()
+        run: |
+          cd out
+          git add -A
+          if ! git diff --cached --quiet; then
+            git -c user.name=github-actions -c user.email=actions@users.noreply.github.com commit -q -m "data: $(date -u +%FT%TZ)"
+            git push -q origin data
+          fi
